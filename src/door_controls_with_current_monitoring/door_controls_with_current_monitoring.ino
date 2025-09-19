@@ -7,6 +7,7 @@
 // -------------------------------
 // const char* ssid = "FRITZ!Powerline 1260";                  // WLAN-Name
 // const char* password = "70323227422421195243"; // WLAN-Passwort
+// Test-Verbindung im Haus-Netzwerk
 const char* ssid = "Pichler";                  // WLAN-Name
 const char* password = "10031584918620092960"; // WLAN-Passwort
 
@@ -17,13 +18,13 @@ const char* mqtt_server = "9f842ff8cdfa4626bbff7520495845c8.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883; // TLS-Port
 
 // MQTT Zugangsdaten
-const char* mqtt_user = "Pichler";             
+const char* mqtt_user = "Pichler";
 const char* mqtt_pass = "DPadgGLWnbdJ2025e!";
 const char* clientID = "klappe1";
 
 // MQTT Topics
-const char* cmd_topic = "huehnerklappe/klappe1/cmd";       
-const char* status_topic = "huehnerklappe/klappe1/status"; 
+const char* cmd_topic    = "huehnerklappe/klappe1/cmd";
+const char* status_topic = "huehnerklappe/klappe1/status";
 
 // -------------------------------
 // WLAN + MQTT Client Objekte
@@ -40,20 +41,23 @@ const int LPWM = 18;  // PWM Rückwärts
 const int pwmFreq = 5000;      // PWM Frequenz
 const int pwmResolution = 8;   // PWM Auflösung: 8 Bit (0–255)
 
-// BTS7960 Überstrom-Pins
-const int R_IS_PIN = 32;  // Vorwärts Warnung
-const int L_IS_PIN = 33;  // Rückwärts Warnung
+// BTS7960 Current-Sense (IS) -> analog an ESP32
+const int R_IS_PIN = 32;  // IS rechts (Vorwärts)
+const int L_IS_PIN = 33;  // IS links  (Rückwärts)
 
 // -------------------------------
 // Status-Variablen
 // -------------------------------
-String motorState = "stopped";  // Aktueller Motorstatus
-int currentPWM = 200;           // Letzter PWM Wert
+String motorState = "stopped";     // Aktueller Motorstatus
+int currentPWM = 200;              // Letzter PWM Wert
+unsigned long motorStartTime = 0;  // Zeitpunkt des letzten Motorstarts (Inrush-Ignore)
 
-// -------------------------------
-// Optionen
-// -------------------------------
-const bool ENABLE_OVERCURRENT_CHECK = false;  // true = Überstromüberwachung aktiv
+// --- Analogstrom-Überwachung: Filter & Grenzwerte (RAW 0..4095) ---
+const uint16_t IS_THRESHOLD_RAW = 2200;  // <-- Kalibrieren!
+const uint16_t IS_HYSTERESIS    = 150;
+const float    IS_ALPHA         = 0.20f; // EMA-Faktor
+uint16_t isFiltR = 0, isFiltL = 0;
+bool isInitialized = false;
 
 // -------------------------------
 // WLAN verbinden
@@ -67,7 +71,6 @@ void setup_wifi() {
     delay(500);
     Serial.print(".");
   }
-
   Serial.println("\nWLAN verbunden.");
   Serial.println("IP-Adresse: " + WiFi.localIP().toString());
 }
@@ -79,15 +82,13 @@ void stopMotor(bool dueToError = false);
 // -------------------------------
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   String msg;
-  for (unsigned int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
   Serial.println("Empfangen: " + msg);
 
   int sep = msg.indexOf(':');
   String cmd = msg;
-  int pwmValue = 200; // Standard PWM, falls nicht angegeben
+  int pwmValue = 200; // Standard PWM
 
   if (sep >= 0) {
     cmd = msg.substring(0, sep);
@@ -96,6 +97,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   }
 
   if (cmd == "open") {
+    // Startzeit setzen, dann fahren
     openDoor(pwmValue);
   } else if (cmd == "close") {
     closeDoor(pwmValue);
@@ -110,7 +112,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Verbindung zum MQTT-Broker...");
-
     if (client.connect(clientID, mqtt_user, mqtt_pass)) {
       Serial.println("Verbunden.");
       client.subscribe(cmd_topic);
@@ -124,32 +125,32 @@ void reconnect() {
 
 // -------------------------------
 // Klappe öffnen (dauerhaft)
-// --> Umgekehrte Drehrichtung
 // -------------------------------
 void openDoor(int pwmValue) {
   currentPWM = pwmValue;
   motorState = "geöffnet";
+  motorStartTime = millis();  // Inrush-Ignore starten
 
   Serial.printf("Öffne Klappe mit PWM %d...\n", pwmValue);
 
-  ledcWrite(0, 0);        // RPWM AUS
-  ledcWrite(1, pwmValue); // LPWM AN
+  ledcWrite(RPWM, pwmValue);
+  ledcWrite(LPWM, 0);
 
   client.publish(status_topic, "geöffnet");
 }
 
 // -------------------------------
 // Klappe schließen (dauerhaft)
-// --> Umgekehrte Drehrichtung
 // -------------------------------
 void closeDoor(int pwmValue) {
   currentPWM = pwmValue;
   motorState = "geschlossen";
+  motorStartTime = millis();  // Inrush-Ignore starten
 
   Serial.printf("Schließe Klappe mit PWM %d...\n", pwmValue);
 
-  ledcWrite(0, pwmValue); // RPWM AN
-  ledcWrite(1, 0);        // LPWM AUS
+  ledcWrite(RPWM, 0);
+  ledcWrite(LPWM, pwmValue);
 
   client.publish(status_topic, "geschlossen");
 }
@@ -159,11 +160,10 @@ void closeDoor(int pwmValue) {
 // -------------------------------
 void stopMotor(bool dueToError) {
   motorState = "stopped";
-
   Serial.println("Motor gestoppt.");
 
-  ledcWrite(0, 0);
-  ledcWrite(1, 0);
+  ledcWrite(RPWM, 0);
+  ledcWrite(LPWM, 0);
 
   if (dueToError) {
     client.publish(status_topic, "FEHLER: ZU HOHER MOTORSTROM");
@@ -173,17 +173,42 @@ void stopMotor(bool dueToError) {
 }
 
 // -------------------------------
-// Überstrom prüfen
+// Überstrom prüfen (analog, gefiltert)
+//  - 1 s Inrush-Ignore nach Start
+//  - EMA-Filter
+//  - Schwellwert + Hysterese
 // -------------------------------
 void checkOvercurrent() {
-  if (!ENABLE_OVERCURRENT_CHECK) return; // Prüfung deaktiviert
+  if (millis() - motorStartTime < 1000) return; // Einschaltstrom ignorieren
 
-  bool r_is = digitalRead(R_IS_PIN);
-  bool l_is = digitalRead(L_IS_PIN);
+  uint16_t rRaw = analogRead(R_IS_PIN);
+  uint16_t lRaw = analogRead(L_IS_PIN);
 
-  if (r_is == HIGH || l_is == HIGH) {
-    Serial.println("FEHLER: ZU HOHER MOTORSTROM erkannt!");
-    stopMotor(true); // Stoppe mit Fehlerstatus
+  if (!isInitialized) { // Initialwert für Filter
+    isFiltR = rRaw;
+    isFiltL = lRaw;
+    isInitialized = true;
+  } else {
+    isFiltR = (uint16_t)(IS_ALPHA * rRaw + (1.0f - IS_ALPHA) * isFiltR);
+    isFiltL = (uint16_t)(IS_ALPHA * lRaw + (1.0f - IS_ALPHA) * isFiltL);
+  }
+
+  // Debug für Kalibrierung:
+  // Serial.printf("IS R=%u (f=%u)  L=%u (f=%u)\n", rRaw, isFiltR, lRaw, isFiltL);
+
+  static bool tripped = false;
+  const uint16_t hi = IS_THRESHOLD_RAW;
+  const uint16_t lo = (IS_THRESHOLD_RAW > IS_HYSTERESIS) ? (IS_THRESHOLD_RAW - IS_HYSTERESIS) : 0;
+
+  bool over = (isFiltR >= hi) || (isFiltL >= hi);
+  bool safe = (isFiltR <= lo)  && (isFiltL <= lo);
+
+  if (!tripped && over) {
+    Serial.println("FEHLER: Überstrom (analog) erkannt!");
+    stopMotor(true);
+    tripped = true;
+  } else if (tripped && safe) {
+    tripped = false; // Freigabe, wenn Strom zurückgeht
   }
 }
 
@@ -194,17 +219,16 @@ void setup() {
   Serial.begin(115200);
   setup_wifi();
 
-  // Configure PWM channels
-  ledcSetup(0, pwmFreq, pwmResolution); // Channel 0 for RPWM
-  ledcSetup(1, pwmFreq, pwmResolution); // Channel 1 for LPWM
+  // PWM-Kanäle initialisieren (Pin-basierte LEDC-API)
+  ledcAttach(RPWM, pwmFreq, pwmResolution);
+  ledcAttach(LPWM, pwmFreq, pwmResolution);
 
-  // Attach pins to channels
-  ledcAttachPin(RPWM, 0);
-  ledcAttachPin(LPWM, 1);
-
-  // Überstrom Pins als Input konfigurieren
+  // IS-Pins als ANALOGE Eingänge (keine Pullups/-downs!)
   pinMode(R_IS_PIN, INPUT);
   pinMode(L_IS_PIN, INPUT);
+  analogReadResolution(12);                 // 0..4095
+  analogSetPinAttenuation(R_IS_PIN, ADC_11db); // ~0..3.3V
+  analogSetPinAttenuation(L_IS_PIN, ADC_11db);
 
   // MQTT-Client starten
   espClient.setInsecure();  // TLS ohne Zertifikatsprüfung
@@ -216,9 +240,7 @@ void setup() {
 // Hauptloop: MQTT aktiv halten + Überstrom überwachen
 // -------------------------------
 void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
+  if (!client.connected()) reconnect();
   client.loop();
 
   checkOvercurrent();
