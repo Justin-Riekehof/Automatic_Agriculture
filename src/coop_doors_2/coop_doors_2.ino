@@ -21,14 +21,14 @@ const char* mqtt_server = "9f842ff8cdfa4626bbff7520495845c8.s1.eu.hivemq.cloud";
 const int   mqtt_port   = 8883;
 const char* mqtt_user   = "Pichler";
 const char* mqtt_pass   = "DPadgGLWnbdJ2025e!";
-const char* clientID    = "klappe1";  // wichtig: einzigartig
+const char* clientID    = "klappe2";  // wichtig: einzigartig
 
 // Topics für Tür 1
-const char* cmd_topic         = "huehnerklappe/klappe1/cmd";
-const char* status_topic      = "huehnerklappe/klappe1/status";
-const char* openTime_topic    = "huehnerklappe/klappe1/openTime";
-const char* closeTime_topic   = "huehnerklappe/klappe1/closeTime";
-const char* schedule_topic    = "huehnerklappe/klappe1/zeitstatus";
+const char* cmd_topic         = "huehnerklappe/klappe2/cmd";
+const char* status_topic      = "huehnerklappe/klappe2/status";
+const char* openTime_topic    = "huehnerklappe/klappe2/openTime";
+const char* closeTime_topic   = "huehnerklappe/klappe2/closeTime";
+const char* schedule_topic    = "huehnerklappe/klappe2/zeitstatus";
 
 // -------------------------------
 // NTP (CET/CEST Berlin)
@@ -86,10 +86,10 @@ const unsigned long HEARTBEAT_INTERVAL_MS = 30000;
 // Dateien im Repo für ESP 1:
 // https://github.com/Justin-Riekehof/Automatic_Agriculture/tree/main/src/coop_doors
 const char* OTA_VERSION_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/version_1.txt";
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_2/version_2.txt";
 
 const char* OTA_FIRMWARE_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/build/esp32.esp32.esp32/coop_doors_1.ino.bin";
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_2/build/esp32.esp32.esp32/coop_doors_2.ino.bin";
 
 // installierte Firmware-Version (wird in NVS gespeichert)
 Preferences otaPrefs;
