@@ -68,8 +68,8 @@ PubSubClient client(espClient);
 // -------------------------------
 // BTS7960
 // -------------------------------
-const int RPWM    = 25;
-const int LPWM    = 26;
+const int RPWM     = 25;
+const int LPWM     = 26;
 const int R_EN_PIN = 27;
 const int L_EN_PIN = 14;
 const uint16_t DEADTIME_MS = 50;
@@ -80,110 +80,97 @@ unsigned long lastHeartbeatMs = 0;
 const unsigned long HEARTBEAT_INTERVAL_MS = 30000;
 
 // -------------------------------
-// OTA über GitHub – nur .ino.bin im Repo
+// OTA über GitHub – Version + BIN nur für ESP 1
 // -------------------------------
 
-// BIN-Datei im Repo:
+// Dateien im Repo für ESP 1:
 // https://github.com/Justin-Riekehof/Automatic_Agriculture/tree/main/src/coop_doors
-const char* OTA_FIRMWARE_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/coop_doors.ino.bin";
+const char* OTA_VERSION_URL =
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/version_1.txt";
 
+const char* OTA_FIRMWARE_URL =
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/coop_doors_1.ino.bin";
+
+// installierte Firmware-Version (wird in NVS gespeichert)
 Preferences otaPrefs;
-String installedVersion = "";             // gespeicherte ETag/ID der aktuell installierten Firmware
+int installedVersion = 0;
 
 unsigned long lastOtaCheckMs = 0;
 const unsigned long OTA_CHECK_INTERVAL_MS = 600000UL;  // 10 Minuten
 
 // ---- NVS Helfer ----
 void loadInstalledVersion() {
-  otaPrefs.begin("ota", true);  // read-only
-  installedVersion = otaPrefs.getString("version", "");
+  otaPrefs.begin("ota1", true);  // read-only, eigener Namespace für ESP1
+  installedVersion = otaPrefs.getInt("version", 0);
   otaPrefs.end();
 
-  Serial.printf("[OTA] Installierte Firmware-ID (NVS): '%s'\n", installedVersion.c_str());
+  Serial.printf("[OTA] Installierte Version (NVS): %d\n", installedVersion);
 }
 
-void saveInstalledVersion(const String& v) {
-  otaPrefs.begin("ota", false);  // write
-  otaPrefs.putString("version", v);
+void saveInstalledVersion(int v) {
+  otaPrefs.begin("ota1", false);  // write
+  otaPrefs.putInt("version", v);
   otaPrefs.end();
 
   installedVersion = v;
-  Serial.printf("[OTA] Neue installierte Firmware-ID gespeichert: '%s'\n", installedVersion.c_str());
+  Serial.printf("[OTA] Neue installierte Version gespeichert: %d\n", installedVersion);
 }
 
-// ETag säubern (W/ und Anführungszeichen entfernen)
-String sanitizeEtag(const String& etagRaw) {
-  String v = etagRaw;
-  v.trim();
-  if (v.startsWith("W/")) {
-    v = v.substring(2);
-    v.trim();
-  }
-  if (v.length() >= 2 && v[0] == '"' && v[v.length() - 1] == '"') {
-    v = v.substring(1, v.length() - 1);
-  }
-  return v;
-}
-
-// Nur die ID (ETag oder Last-Modified) der aktuellen firmware holen
-String getRemoteFirmwareId() {
+// Remote-Version aus version_1.txt lesen
+int getRemoteVersion() {
   WiFiClientSecure client;
-  client.setInsecure();
+  client.setInsecure();  // für Tests ok
 
   HTTPClient https;
-  Serial.println("[OTA] Hole Firmware-ID (ETag) von GitHub...");
+  Serial.println("[OTA] Hole version_1.txt von GitHub...");
 
-  if (!https.begin(client, OTA_FIRMWARE_URL)) {
-    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (firmware.bin)");
-    return "";
+  if (!https.begin(client, OTA_VERSION_URL)) {
+    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (version_1.txt)");
+    return -1;
   }
-
-  // Header sammeln, sonst liefert header() immer ""
-  const char* headerKeys[] = { "ETag", "Last-Modified" };
-  https.collectHeaders(headerKeys, 2);
 
   int httpCode = https.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[OTA] HTTP Fehler firmware.bin (GET): %d\n", httpCode);
+    Serial.printf("[OTA] HTTP Fehler version_1.txt: %d\n", httpCode);
     https.end();
-    return "";
+    return -1;
   }
 
-  String etag    = https.header("ETag");
-  String lastMod = https.header("Last-Modified");
-
+  String payload = https.getString();
   https.end();
+  payload.trim();
 
-  String id = sanitizeEtag(etag);
-  if (id.length() == 0) {
-    id = lastMod;
+  if (payload.length() == 0) {
+    Serial.println("[OTA] version_1.txt leer.");
+    return -1;
   }
 
-  id.trim();
-  Serial.printf("[OTA] Remote Firmware-ID: '%s'\n", id.c_str());
-  return id;
+  int remoteVersion = payload.toInt();
+  if (remoteVersion == 0 && payload != "0") {
+    Serial.printf("[OTA] Konnte Version nicht parsen: '%s'\n", payload.c_str());
+    return -1;
+  }
+
+  Serial.printf("[OTA] Remote-Version (version_1.txt): %d\n", remoteVersion);
+  return remoteVersion;
 }
 
-// Das eigentliche OTA – newId ist die eben gelesene ETag/ID
-bool performOTA(const String& newId) {
+// OTA-Firmware laden und flashen; bei Erfolg Version speichern
+bool performOTA(int newVersion) {
   WiFiClientSecure client;
   client.setInsecure();
 
   HTTPClient https;
-  Serial.println("[OTA] Lade firmware.bin von GitHub...");
+  Serial.println("[OTA] Lade coop_doors_1.ino.bin von GitHub...");
 
   if (!https.begin(client, OTA_FIRMWARE_URL)) {
-    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (firmware.bin)");
+    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (firmware)");
     return false;
   }
 
-  const char* headerKeys[] = { "ETag", "Last-Modified" };
-  https.collectHeaders(headerKeys, 2);
-
   int httpCode = https.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[OTA] HTTP Fehler firmware.bin (GET): %d\n", httpCode);
+    Serial.printf("[OTA] HTTP Fehler firmware (GET): %d\n", httpCode);
     https.end();
     return false;
   }
@@ -225,10 +212,10 @@ bool performOTA(const String& newId) {
     return false;
   }
 
-  Serial.println("[OTA] Update erfolgreich, Firmware-ID wird gespeichert...");
+  Serial.println("[OTA] Update erfolgreich, Version wird gespeichert...");
   https.end();
 
-  saveInstalledVersion(newId);
+  saveInstalledVersion(newVersion);
 
   Serial.println("[OTA] Starte neu...");
   delay(1000);
@@ -250,23 +237,19 @@ void checkForOtaUpdate(bool forceNow = false) {
   }
   lastOtaCheckMs = now;
 
-  String remoteId = getRemoteFirmwareId();
-  if (remoteId.length() == 0) {
-    Serial.println("[OTA] Remote-ID leer, kein Update.");
+  int remoteVersion = getRemoteVersion();
+  if (remoteVersion < 0) {
+    Serial.println("[OTA] Remote-Version unbekannt, kein Update.");
     return;
   }
 
-  if (installedVersion.length() == 0) {
-    Serial.println("[OTA] Keine installierte ID in NVS gefunden (Erstinstallation).");
-  }
+  Serial.printf("[OTA] Vergleich: remote=%d, local=%d\n", remoteVersion, installedVersion);
 
-  if (remoteId != installedVersion) {
-    Serial.printf("[OTA] Neue Firmware erkannt (remote='%s', local='%s'). Starte OTA...\n",
-                  remoteId.c_str(), installedVersion.c_str());
-    performOTA(remoteId);
+  if (remoteVersion > installedVersion) {
+    Serial.println("[OTA] Neue Firmware-Version gefunden, starte OTA...");
+    performOTA(remoteVersion);
   } else {
-    Serial.printf("[OTA] Firmware ist aktuell (ID '%s'). Kein Update nötig.\n",
-                  installedVersion.c_str());
+    Serial.println("[OTA] Firmware ist aktuell, kein Update nötig.");
   }
 }
 
@@ -541,7 +524,7 @@ void setup() {
   Serial.begin(115200);
   setup_wifi();
 
-  // installierte Firmware-ID aus NVS lesen
+  // Installierte Version aus NVS laden
   loadInstalledVersion();
 
   pinMode(RPWM, OUTPUT);
@@ -565,7 +548,6 @@ void setup() {
   publishScheduleInfo();
 
   lastHeartbeatMs = millis();
-  
 }
 
 void loop() {
