@@ -549,6 +549,7 @@ void setup() {
 
   lastHeartbeatMs = millis();
 
+  Serial.println("JA MAAAAAAAAAAAAAAAAAAAN");
 }
 
 void loop() {
