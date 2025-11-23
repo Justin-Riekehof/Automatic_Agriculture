@@ -565,8 +565,7 @@ void setup() {
   publishScheduleInfo();
 
   lastHeartbeatMs = millis();
-
-  Serial.println("YEEEEEEEEEAAAAAH");
+  
 }
 
 void loop() {
