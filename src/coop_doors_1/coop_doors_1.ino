@@ -89,7 +89,7 @@ const char* OTA_VERSION_URL =
   "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/version_1.txt";
 
 const char* OTA_FIRMWARE_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/coop_doors_1.ino.bin";
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/build/esp32.esp32.esp32/coop_doors_1.ino.bin";
 
 // installierte Firmware-Version (wird in NVS gespeichert)
 Preferences otaPrefs;
@@ -549,7 +549,6 @@ void setup() {
 
   lastHeartbeatMs = millis();
 
-  Serial.println("YEEEEEEEEAAAAH");
 }
 
 void loop() {
