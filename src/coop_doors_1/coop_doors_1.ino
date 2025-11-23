@@ -86,10 +86,10 @@ const unsigned long HEARTBEAT_INTERVAL_MS = 30000;
 // Dateien im Repo für ESP 1:
 // https://github.com/Justin-Riekehof/Automatic_Agriculture/tree/main/src/coop_doors
 const char* OTA_VERSION_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/version_1.txt";
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/version_1.txt";
 
 const char* OTA_FIRMWARE_URL =
-  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/coop_doors_1.ino.bin";
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors_1/coop_doors_1.ino.bin";
 
 // installierte Firmware-Version (wird in NVS gespeichert)
 Preferences otaPrefs;
