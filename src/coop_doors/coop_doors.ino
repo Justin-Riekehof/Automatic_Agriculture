@@ -3,6 +3,10 @@
 #include <PubSubClient.h>
 #include <time.h>
 
+// --- OTA / HTTP ---
+#include <HTTPClient.h>
+#include <Update.h>
+
 // -------------------------------
 // Wi-Fi
 // -------------------------------
@@ -16,14 +20,14 @@ const char* mqtt_server = "9f842ff8cdfa4626bbff7520495845c8.s1.eu.hivemq.cloud";
 const int   mqtt_port   = 8883;
 const char* mqtt_user   = "Pichler";
 const char* mqtt_pass   = "DPadgGLWnbdJ2025e!";
-const char* clientID    = "klappe2";  // wichtig: einzigartig
+const char* clientID    = "klappe1";  // wichtig: einzigartig
 
 // Topics für Tür 1
-const char* cmd_topic         = "huehnerklappe/klappe2/cmd";
-const char* status_topic      = "huehnerklappe/klappe2/status";
-const char* openTime_topic    = "huehnerklappe/klappe2/openTime";
-const char* closeTime_topic   = "huehnerklappe/klappe2/closeTime";
-const char* schedule_topic    = "huehnerklappe/klappe2/zeitstatus";
+const char* cmd_topic         = "huehnerklappe/klappe1/cmd";
+const char* status_topic      = "huehnerklappe/klappe1/status";
+const char* openTime_topic    = "huehnerklappe/klappe1/openTime";
+const char* closeTime_topic   = "huehnerklappe/klappe1/closeTime";
+const char* schedule_topic    = "huehnerklappe/klappe1/zeitstatus";
 
 // -------------------------------
 // NTP (CET/CEST Berlin)
@@ -73,6 +77,22 @@ const uint16_t DEADTIME_MS = 50;
 String doorStatus = "Status unbekannt";
 unsigned long lastHeartbeatMs = 0;
 const unsigned long HEARTBEAT_INTERVAL_MS = 30000;
+
+// -------------------------------
+// OTA über GitHub
+// -------------------------------
+
+// Lokale Firmware-Version (bei neuem Build hochzählen)
+#define FW_VERSION 1
+
+// Dateien im Repo:
+// https://github.com/Justin-Riekehof/Automatic_Agriculture/tree/main/src/coop_doors
+const char* OTA_VERSION_URL =
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/version.txt";
+
+const char* OTA_FIRMWARE_URL =
+  "https://raw.githubusercontent.com/Justin-Riekehof/Automatic_Agriculture/main/src/coop_doors/coop_doors.bin";
+
 
 // -----------------------------------------------------------
 // MOTORSTEUERUNG – DAUERBETRIEB BIS NEUER BEFEHL
@@ -274,6 +294,127 @@ void setup_wifi() {
 }
 
 // -----------------------------------------------------------
+// OTA HELFER
+// -----------------------------------------------------------
+
+int getOnlineVersion() {
+  WiFiClientSecure client;
+  client.setInsecure();  // fürs Erste ok
+
+  HTTPClient https;
+  Serial.println("[OTA] Hole version.txt von GitHub...");
+
+  if (!https.begin(client, OTA_VERSION_URL)) {
+    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (version.txt)");
+    return -1;
+  }
+
+  int httpCode = https.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[OTA] HTTP Fehler version.txt: %d\n", httpCode);
+    https.end();
+    return -1;
+  }
+
+  String payload = https.getString();
+  https.end();
+  payload.trim();
+
+  int onlineVersion = payload.toInt();
+  Serial.printf("[OTA] Online-Version: %d, Lokale Version: %d\n", onlineVersion, FW_VERSION);
+
+  if (onlineVersion == 0 && payload != "0") {
+    Serial.println("[OTA] Konnte Version nicht parsen.");
+    return -1;
+  }
+
+  return onlineVersion;
+}
+
+bool performOTA() {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient https;
+  Serial.println("[OTA] Lade firmware.bin von GitHub...");
+
+  if (!https.begin(client, OTA_FIRMWARE_URL)) {
+    Serial.println("[OTA] HTTPS begin() fehlgeschlagen (firmware.bin)");
+    return false;
+  }
+
+  int httpCode = https.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[OTA] HTTP Fehler firmware.bin: %d\n", httpCode);
+    https.end();
+    return false;
+  }
+
+  int contentLength = https.getSize();
+  if (contentLength <= 0) {
+    Serial.println("[OTA] Ungültige Dateigröße");
+    https.end();
+    return false;
+  }
+
+  Serial.printf("[OTA] Firmwaregröße: %d Bytes\n", contentLength);
+
+  if (!Update.begin(contentLength)) { // OTA-Partition nötig!
+    Serial.println("[OTA] Update.begin() fehlgeschlagen");
+    https.end();
+    return false;
+  }
+
+  WiFiClient *stream = https.getStreamPtr();
+  size_t written = Update.writeStream(*stream);
+  Serial.printf("[OTA] Geschrieben: %u Bytes\n", (unsigned)written);
+
+  if (written != (size_t)contentLength) {
+    Serial.println("[OTA] Geschriebene Größe stimmt nicht mit Content-Length überein!");
+    https.end();
+    return false;
+  }
+
+  if (!Update.end()) {
+    Serial.printf("[OTA] Update.end() Fehler: %s\n", Update.errorString());
+    https.end();
+    return false;
+  }
+
+  if (!Update.isFinished()) {
+    Serial.println("[OTA] Update nicht vollständig!");
+    https.end();
+    return false;
+  }
+
+  Serial.println("[OTA] Update erfolgreich, starte neu...");
+  https.end();
+  delay(1000);
+  ESP.restart();
+  return true;  // praktisch nicht mehr erreicht
+}
+
+void checkForOtaUpdate() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[OTA] Kein WLAN, OTA übersprungen.");
+    return;
+  }
+
+  int onlineVersion = getOnlineVersion();
+  if (onlineVersion <= 0) {
+    Serial.println("[OTA] Online-Version unbekannt, kein Update.");
+    return;
+  }
+
+  if (onlineVersion > FW_VERSION) {
+    Serial.println("[OTA] Neue Firmware gefunden, starte OTA...");
+    performOTA();
+  } else {
+    Serial.println("[OTA] Firmware ist aktuell, kein Update nötig.");
+  }
+}
+
+// -----------------------------------------------------------
 // MQTT CALLBACK
 // -----------------------------------------------------------
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
@@ -356,6 +497,10 @@ void setup() {
   client.setCallback(mqtt_callback);
 
   setup_time();
+
+  // *** OTA-Check direkt nach WLAN+Zeit ***
+  checkForOtaUpdate();
+
   reconnect();
 
   publishDoorStatusRetained();
