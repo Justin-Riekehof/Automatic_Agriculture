@@ -47,8 +47,8 @@ int closeHour   = 20;
 int closeMinute = 0;
 
 // -1 bedeutet deaktiviert
-bool openDisabled  = false;
-bool closeDisabled = false;
+bool openDisabled  = true;
+bool closeDisabled = true;
 
 bool openDoneToday  = false;
 bool closeDoneToday = false;
